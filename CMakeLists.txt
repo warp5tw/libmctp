@@ -9,7 +9,7 @@ add_definitions (-DMCTP_DEFAULT_ALLOC)
 # TODO: Remove, when API for response is added
 add_definitions (-DMCTP_ASTPCIE_RESPONSE_WA)
 
-add_library (mctp_intel STATIC alloc.c astlpc.c core.c log.c libmctp.h serial.c astpcie.c smbus.c)
+add_library (mctp_intel STATIC alloc.c astlpc.c core.c log.c libmctp.h serial.c astpcie.c nupcie.c smbus.c)
 
 target_include_directories (mctp_intel PUBLIC
                             $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}>
@@ -57,9 +57,12 @@ add_test (NAME binding_private COMMAND test_binding_private)
 add_executable (mctp_astpcie_discovery utils/mctp-astpcie-discovery.c)
 target_link_libraries (mctp_astpcie_discovery mctp_intel)
 
+add_executable (mctp_nupcie_discovery utils/mctp-nupcie-discovery.c)
+target_link_libraries (mctp_nupcie_discovery mctp_intel)
+
 add_executable (test_encode_decode tests/test_encode_decode.c)
 target_link_libraries (test_encode_decode mctp_intel)
 add_test (NAME encode_decode COMMAND test_encode_decode)
 
 install (TARGETS mctp_intel DESTINATION lib)
-install (FILES libmctp.h libmctp-cmds.h libmctp-vdpci.h libmctp-smbus.h libmctp-astpcie.h libmctp-msgtypes.h DESTINATION include)
+install (FILES libmctp.h libmctp-cmds.h libmctp-vdpci.h libmctp-smbus.h libmctp-astpcie.h libmctp-nupcie.h libmctp-msgtypes.h DESTINATION include)
