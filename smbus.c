@@ -32,7 +32,8 @@
 
 #define MCTP_COMMAND_CODE 0x0F
 #define MCTP_SLAVE_ADDR_INDEX 0
-#define MCTP_SOURCE_SLAVE_ADDRESS 0x11
+//8bit:0x20;7bit:0x10 => NCT6681 only response to i2c slave address 0x20
+#define MCTP_SOURCE_SLAVE_ADDRESS 0x21
 
 #define SMBUS_COMMAND_CODE_SIZE 1
 #define SMBUS_LENGTH_FIELD_SIZE 1
@@ -217,10 +218,12 @@ int mctp_smbus_read(struct mctp_binding_smbus *smbus)
 
 	len = read(smbus->in_fd, smbus->rxbuf, sizeof(smbus->rxbuf));
 
-	if (len < 0) {
+	if (len < 0 || len < sizeof(*smbus_hdr_rx)) {
 		mctp_prerr("Failed to read");
 		return -1;
 	}
+
+	smbus_hdr_rx = (void *)smbus->rxbuf;
 
 	if (len < sizeof(*smbus_hdr_rx)) {
 		// This condition hits from from time to time, even with

@@ -21,6 +21,11 @@ libmctp_la_SOURCES += astpcie.c
 include_HEADERS += libmctp-astpcie.h
 endif
 
+if LIBMCTP_BINDING_smbus
+libmctp_la_SOURCES += smbus.c
+include_HEADERS += libmctp-smbus.h
+endif
+
 if HAVE_SYSTEMD
 systemdsystemunit_DATA = \
 	mctp-demux.service
@@ -47,7 +52,7 @@ TESTS = $(check_PROGRAMS)
 
 check_PROGRAMS = tests/test_eid tests/test_seq tests/test_bridge \
 		 tests/test_astlpc tests/test_serial \
-		 tests/test_astpcie tests/test_cmds
+		 tests/test_astpcie tests/test_cmds tests/test_smbus
 # We set a global LDADD here, as there's no way to specify it for all
 # tests. This means other targets' LDADDs need to be overridden.
 LDADD = tests/libtest-utils.a libmctp.la
