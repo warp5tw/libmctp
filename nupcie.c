@@ -189,6 +189,7 @@ static int mctp_data_rx(struct mctp_binding_nupcie *nupcie, uint32_t *data)
 	payload_len = mctp_nupcie_rx_get_payload_size(hdr);
 	pkt_prv.routing = PCIE_GET_ROUTING(hdr);
 	pkt_prv.remote_id = PCIE_GET_REQ_ID(hdr);
+	pkt_prv.own_id = PCIE_GET_TARGET_ID(hdr);
 
 	pkt = mctp_pktbuf_alloc(&nupcie->binding, 0);
 	if (!pkt) {

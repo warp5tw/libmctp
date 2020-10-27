@@ -53,6 +53,7 @@ struct mctp_nupcie_pkt_private {
 	enum mctp_nupcie_msg_routing routing;
 	/* source (rx)/target (tx) endpoint bdf */
 	uint16_t remote_id;
+	uint16_t own_id;
 #ifdef MCTP_ASTPCIE_RESPONSE_WA
 	/*
 	 * FIXME: In libmctp core there is no support for response, which means
