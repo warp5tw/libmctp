@@ -5,8 +5,6 @@
 #include "config.h"
 #endif
 
-#include <byteswap.h>
-#include <endian.h>
 #include <assert.h>
 #include <errno.h>
 #include <fcntl.h>
@@ -21,7 +19,6 @@
 #include "libmctp-nupcie.h"
 #include "libmctp-log.h"
 #include "nupcie.h"
-#include <stdio.h>
 
 #undef pr_fmt
 #define pr_fmt(fmt) "nupcie: " fmt
@@ -61,11 +58,9 @@ static int mctp_nupcie_start(struct mctp_binding *b)
 	assert(nupcie);
 
 	rc = mctp_nupcie_open(nupcie);
-#if 0
-	if (!rc)
-		rc = mctp_binding_astpcie_get_bdf(astpcie);
-#endif
-	return rc;
+	if (rc)
+		return -errno;
+	return 0;
 }
 
 static uint8_t mctp_nupcie_tx_get_pad_len(struct mctp_pktbuf *pkt)
@@ -98,11 +93,6 @@ static int mctp_nupcie_tx(struct mctp_binding *b,
 
 	memcpy(hdr, &mctp_pcie_hdr_template_be, sizeof(*hdr));
 
-#ifdef MCTP_ASTPCIE_RESPONSE_WA
-	if (!(pkt_prv->flags_seq_tag & MCTP_HDR_FLAG_TO))
-		mctp_hdr->flags_seq_tag = pkt_prv->flags_seq_tag;
-#endif
-
 	mctp_prdebug("TX, len: %d, pad: %d", payload_len_dw, pad);
 
 	PCIE_SET_ROUTING(hdr, pkt_prv->routing);
@@ -114,9 +104,7 @@ static int mctp_nupcie_tx(struct mctp_binding *b,
 	len = (payload_len_dw * sizeof(uint32_t)) +
 	      NUVOTON_MCTP_PCIE_VDM_HDR_SIZE;
 
-	for (i = 0; i < len ; i+=4)
-		fprintf(stderr, "TX i: %d data:0x%02x%02x%02x%02x\r\n", i, pkt->data[i+3], pkt->data[i+2], pkt->data[i+1], pkt->data[i]);
-
+	mctp_trace_tx(pkt->data, len);
 
 	write_len = write(nupcie->fd, pkt->data, len);
 	if (write_len < 0) {
@@ -160,8 +148,21 @@ int mctp_nupcie_poll(struct mctp_binding_nupcie *nupcie, int timeout)
 	return 0;
 }
 
-static int mctp_data_rx(struct mctp_binding_nupcie *nupcie, uint32_t *data)
+static bool mctp_nupcie_is_routing_supported(int routing)
 {
+	switch (routing) {
+	case PCIE_ROUTE_TO_RC:
+	case PCIE_ROUTE_BY_ID:
+	case PCIE_BROADCAST_FROM_RC:
+		return true;
+	default:
+		return false;
+	}
+}
+
+int mctp_nupcie_rx(struct mctp_binding_nupcie *nupcie)
+{
+	uint32_t data[MCTP_NUPCIE_BINDING_DEFAULT_BUFFER];
 	struct mctp_nupcie_pkt_private pkt_prv;
 	struct mctp_pktbuf *pkt;
 	struct mctp_pcie_hdr *hdr;
@@ -169,25 +170,25 @@ static int mctp_data_rx(struct mctp_binding_nupcie *nupcie, uint32_t *data)
 	size_t read_len, payload_len;
 	int rc;
 
+	read_len = read(nupcie->fd, &data, sizeof(data));;
+	if (read_len < 0) {
+		mctp_prerr("Reading RX data failed (errno = %d)", errno);
+		return -1;
+	}
+
+	mctp_trace_rx(&data, read_len);
+
 	hdr = (struct mctp_pcie_hdr *)data;
-
-	if (hdr->vendor != VENDOR_ID_DMTF_VDM ) {
-		fprintf(stderr, "it's not DMTF VDMs header\r\n");
-		return 0;
-	}
-
-	if (hdr->code != MSG_CODE_VDM_TYPE_1) {
-		fprintf(stderr, "it's not VDM code\r\n");
-		return 0;
-	}
-
-	if (hdr->mbz != 0) {
-		fprintf(stderr, "Traffic Class is no zero\r\n");
-		return 0;
-	}
-
 	payload_len = mctp_nupcie_rx_get_payload_size(hdr);
+
 	pkt_prv.routing = PCIE_GET_ROUTING(hdr);
+
+	if (!mctp_nupcie_is_routing_supported(pkt_prv.routing)) {
+		mctp_prerr("unsupported routing value: %d", pkt_prv.routing);
+		return -1;
+	}
+
+
 	pkt_prv.remote_id = PCIE_GET_REQ_ID(hdr);
 	pkt_prv.own_id = PCIE_GET_TARGET_ID(hdr);
 
@@ -207,46 +208,8 @@ static int mctp_data_rx(struct mctp_binding_nupcie *nupcie, uint32_t *data)
 	}
 
 	mctp_hdr = mctp_pktbuf_hdr(pkt);
-#ifdef MCTP_ASTPCIE_RESPONSE_WA
-	pkt_prv.flags_seq_tag = mctp_hdr->flags_seq_tag;
-#endif
 	memcpy(pkt->msg_binding_private, &pkt_prv, sizeof(pkt_prv));
 	mctp_bus_rx(&nupcie->binding, pkt);
-
-	return PCIE_GET_DATA_LEN(hdr) + PCIE_VDM_HDR_SIZE_DW;
-}
-
-int mctp_nupcie_rx(struct mctp_binding_nupcie *nupcie)
-{
-	uint32_t data[MCTP_NUPCIE_BINDING_DEFAULT_BUFFER];
-	struct mctp_nupcie_pkt_private pkt_prv;
-	struct mctp_pktbuf *pkt;
-	struct mctp_pcie_hdr *hdr;
-	struct mctp_hdr *mctp_hdr;
-	size_t read_len, payload_len;
-	int ret, index = 0, i;
-
-	read_len = read(nupcie->fd, &data, sizeof(data));;
-	if (read_len < 0) {
-		mctp_prerr("Reading RX data failed (errno = %d)", errno);
-		return -1;
-	}
-
-  	fprintf(stderr,"rx data read_len:0x%x\r\n", read_len);
-
-	for (i = 0; i < read_len ; i++)
-		fprintf(stderr, "Rx i: %d data:0x%lx\r\n", i, data[i]);
-
- 	while (index < read_len) {
-		ret = mctp_data_rx(nupcie, &data[index]);
-		if (ret == 0)
-			return 0;
-
-		if (ret < 0)
-			return ret;
-		index += ret;
-		fprintf(stderr, "index: %d ret %d\r\n", index, ret);
-	}
 
 	return 0;
 }

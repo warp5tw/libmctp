@@ -88,7 +88,8 @@ static void discovery_handle_notify_resp(void)
 }
 
 static void rx_control_message(mctp_eid_t src, void *data, void *msg,
-			       size_t len, void *ext)
+			       size_t len, bool tag_owner, uint8_t tag,
+			       void *ext)
 {
 	struct mctp_ctrl_req *req = (struct mctp_ctrl_req *)msg;
 	struct mctp_nupcie_pkt_private *pkt_prv =
@@ -145,16 +146,14 @@ static void rx_control_message(mctp_eid_t src, void *data, void *msg,
 		return;
 	}
 
-#ifdef MCTP_ASTPCIE_RESPONSE_WA
-	pkt_prv->flags_seq_tag &= ~(MCTP_HDR_FLAG_TO);
-#endif
 	mctp_binding_set_tx_enabled(ctx->nupcie_binding, true);
-	rc = mctp_message_tx(ctx->mctp, src, &resp, resp_len, (void *)pkt_prv);
+	rc = mctp_message_tx(ctx->mctp, src, &resp, resp_len, false, tag,
+			     (void *)pkt_prv);
 	assert(rc == 0);
 }
 
 static void rx_message(mctp_eid_t src, void *data, void *msg, size_t len,
-		       void *msg_binding_private)
+		       bool tag_owner, uint8_t tag, void *msg_binding_private)
 {
 	struct mctp_ctrl_resp *resp = (struct mctp_ctrl_resp *)msg;
 	uint8_t cmd = resp->hdr.command_code;
@@ -201,13 +200,10 @@ static void discovery_with_notify_flow(struct mctp_binding_nupcie *nupcie,
 	pkt_prv.routing = PCIE_ROUTE_TO_RC;
 	pkt_prv.remote_id = 0xffff;
 
-#ifdef MCTP_ASTPCIE_RESPONSE_WA
-	pkt_prv.flags_seq_tag |= MCTP_HDR_FLAG_TO;
-#endif
-
 	mctp_binding_set_tx_enabled(ctx->nupcie_binding, true);
 	rc = mctp_message_tx(ctx->mctp, 0x00, &req,
-			     sizeof(struct mctp_ctrl_msg_hdr), &pkt_prv);
+			     sizeof(struct mctp_ctrl_msg_hdr), true, 0,
+			     &pkt_prv);
 	assert(rc == 0);
 
 	discovery_regular_flow(nupcie, ctx);
@@ -222,6 +218,7 @@ int main(void)
 	int rc;
 
 	mctp_set_log_stdio(MCTP_LOG_DEBUG);
+	mctp_set_tracing_enabled(1);
 
 	mctp = mctp_init();
 	assert(mctp);
