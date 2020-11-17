@@ -111,6 +111,8 @@ struct mctp_ctrl_cmd_get_routing_table {
 #define MCTP_CTRL_CC_ERROR_UNSUPPORTED_CMD 0x05
 /* 0x80 - 0xFF are command specific */
 
+#define MCTP_CTRL_CC_GET_MCTP_VER_SUPPORT_UNSUPPORTED_TYPE 0x80
+
 /* MCTP Set Endpoint ID response fields
  * See DSP0236 v1.3.0 Table 14.
  */
@@ -133,6 +135,10 @@ struct mctp_ctrl_cmd_get_routing_table {
 #define MCTP_BINDING_KCS 0x04
 #define MCTP_BINDING_SERIAL 0x05
 #define MCTP_BINDING_VEDNOR 0x06
+
+#define MCTP_GET_VDM_SUPPORT_PCIE_FORMAT_ID 0x00
+#define MCTP_GET_VDM_SUPPORT_IANA_FORMAT_ID 0x01
+#define MCTP_GET_VDM_SUPPORT_NO_MORE_CAP_SET 0xFF
 
 typedef union {
 	struct {
@@ -197,6 +203,8 @@ typedef union {
 	(((field) >> MCTP_ROUTING_ENTRY_TYPE_SHIFT) &                          \
 	 MCTP_ROUTING_ENTRY_TYPE_MASK)
 
+#define MCTP_GET_VERSION_SUPPORT_BASE_INFO 0xFF
+
 struct mctp_ctrl_resp_get_eid {
 	struct mctp_ctrl_msg_hdr ctrl_hdr;
 	uint8_t completion_code;
@@ -251,9 +259,46 @@ struct get_routing_table_entry {
 	uint8_t phys_address_size;
 } __attribute__((__packed__));
 
+struct mctp_ctrl_resp_get_vdm_support {
+	struct mctp_ctrl_msg_hdr ctrl_hdr;
+	uint8_t completion_code;
+	uint8_t vendor_id_set_selector;
+	uint8_t vendor_id_format;
+	union {
+		uint16_t vendor_id_data_pcie;
+		uint32_t vendor_id_data_iana;
+	};
+	/* following bytes are dependent on vendor id format
+	 * and shall be interpreted by appropriate binding handler */
+} __attribute__((__packed__));
+
+struct mctp_ctrl_resp_get_msg_type_support {
+	struct mctp_ctrl_msg_hdr ctrl_hdr;
+	uint8_t completion_code;
+	uint8_t msg_type_count;
+} __attribute__((__packed__));
+
+struct msg_type_entry {
+	uint8_t msg_type_no;
+} __attribute__((__packed__));
+
+struct mctp_ctrl_resp_get_mctp_ver_support {
+	struct mctp_ctrl_msg_hdr ctrl_hdr;
+	uint8_t completion_code;
+	uint8_t number_of_entries;
+} __attribute__((__packed__));
+
+struct version_entry {
+	uint8_t major;
+	uint8_t minor;
+	uint8_t update;
+	uint8_t alpha;
+} __attribute__((__packed__));
+
 bool mctp_ctrl_handle_msg(struct mctp *mctp, struct mctp_bus *bus,
 			  mctp_eid_t src, mctp_eid_t dest, void *buffer,
-			  size_t length, void *msg_binding_private);
+			  size_t length, bool tag_owner, uint8_t tag,
+			  void *msg_binding_private);
 
 int mctp_set_rx_ctrl(struct mctp *mctp, mctp_rx_fn fn, void *data);
 
@@ -300,6 +345,10 @@ int mctp_ctrl_cmd_set_endpoint_id(struct mctp *mctp, mctp_eid_t dest_eid,
 int mctp_ctrl_cmd_get_endpoint_id(struct mctp *mctp, mctp_eid_t dest_eid,
 				  bool bus_owner,
 				  struct mctp_ctrl_resp_get_eid *response);
+
+int mctp_ctrl_cmd_get_vdm_support(
+	struct mctp *mctp, mctp_eid_t src_eid,
+	struct mctp_ctrl_resp_get_vdm_support *response);
 
 #ifdef __cplusplus
 }

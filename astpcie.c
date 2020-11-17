@@ -32,7 +32,7 @@ static const struct mctp_pcie_hdr mctp_pcie_hdr_template_be = {
 	.vendor = VENDOR_ID_DMTF_VDM
 };
 
-static int mctp_astpcie_get_bdf(struct mctp_binding_astpcie *astpcie)
+static int mctp_astpcie_get_bdf_ioctl(struct mctp_binding_astpcie *astpcie)
 {
 	struct aspeed_mctp_get_bdf bdf;
 	int rc;
@@ -40,6 +40,17 @@ static int mctp_astpcie_get_bdf(struct mctp_binding_astpcie *astpcie)
 	rc = ioctl(astpcie->fd, ASPEED_MCTP_IOCTL_GET_BDF, &bdf);
 	if (!rc)
 		astpcie->bdf = bdf.bdf;
+
+	return rc;
+}
+
+int mctp_astpcie_get_bdf(struct mctp_binding_astpcie *astpcie, uint16_t *bdf)
+{
+	int rc;
+
+	rc = mctp_astpcie_get_bdf_ioctl(astpcie);
+	if (!rc)
+		*bdf = astpcie->bdf;
 
 	return rc;
 }
@@ -70,9 +81,11 @@ static int mctp_astpcie_start(struct mctp_binding *b)
 
 	rc = mctp_astpcie_open(astpcie);
 	if (!rc)
-		rc = mctp_astpcie_get_bdf(astpcie);
+		rc = mctp_astpcie_get_bdf_ioctl(astpcie);
+	if (rc)
+		return -errno;
 
-	return rc;
+	return 0;
 }
 
 static uint8_t mctp_astpcie_tx_get_pad_len(struct mctp_pktbuf *pkt)
@@ -104,11 +117,6 @@ static int mctp_astpcie_tx(struct mctp_binding *b, struct mctp_pktbuf *pkt)
 
 	memcpy(hdr, &mctp_pcie_hdr_template_be, sizeof(*hdr));
 
-#ifdef MCTP_ASTPCIE_RESPONSE_WA
-	if (!(pkt_prv->flags_seq_tag & MCTP_HDR_FLAG_TO))
-		mctp_hdr->flags_seq_tag = pkt_prv->flags_seq_tag;
-#endif
-
 	mctp_prdebug("TX, len: %d, pad: %d", payload_len_dw, pad);
 
 	PCIE_SET_ROUTING(hdr, pkt_prv->routing);
@@ -119,6 +127,8 @@ static int mctp_astpcie_tx(struct mctp_binding *b, struct mctp_pktbuf *pkt)
 
 	len = (payload_len_dw * sizeof(uint32_t)) +
 	      ASPEED_MCTP_PCIE_VDM_HDR_SIZE;
+
+	mctp_trace_tx(pkt->data, len);
 
 	write_len = write(astpcie->fd, pkt->data, len);
 	if (write_len < 0) {
@@ -190,6 +200,8 @@ int mctp_astpcie_rx(struct mctp_binding_astpcie *astpcie)
 		return -1;
 	}
 
+	mctp_trace_rx(&data, read_len);
+
 	if (read_len != ASTPCIE_PACKET_SIZE(MCTP_BTU)) {
 		mctp_prerr("Incorrect packet size: %zd", read_len);
 		return -1;
@@ -223,9 +235,6 @@ int mctp_astpcie_rx(struct mctp_binding_astpcie *astpcie)
 	}
 
 	mctp_hdr = mctp_pktbuf_hdr(pkt);
-#ifdef MCTP_ASTPCIE_RESPONSE_WA
-	pkt_prv.flags_seq_tag = mctp_hdr->flags_seq_tag;
-#endif
 	memcpy(pkt->msg_binding_private, &pkt_prv, sizeof(pkt_prv));
 
 	mctp_bus_rx(&astpcie->binding, pkt);

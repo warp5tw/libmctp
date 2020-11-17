@@ -124,6 +124,8 @@ static int mctp_smbus_tx(struct mctp_binding_smbus *smbus, const uint8_t len,
 	}
 
 #endif
+	mctp_trace_tx(smbus->txbuf, len);
+
 	struct i2c_msg msg[1] = { { .addr = pkt_pvt->slave_addr >>
 					    1, // seven bit address
 				    .flags = 0,
@@ -210,6 +212,7 @@ int mctp_smbus_read(struct mctp_binding_smbus *smbus)
 	bool eom = false;
 #endif
 
+	smbus_hdr_rx = (void *)smbus->rxbuf;
 	int ret = lseek(smbus->in_fd, 0, SEEK_SET);
 	if (ret < 0) {
 		mctp_prerr("Failed to seek");
@@ -223,7 +226,7 @@ int mctp_smbus_read(struct mctp_binding_smbus *smbus)
 		return -1;
 	}
 
-	smbus_hdr_rx = (void *)smbus->rxbuf;
+	mctp_trace_rx(smbus->rxbuf, len);
 
 	if (len < sizeof(*smbus_hdr_rx)) {
 		// This condition hits from from time to time, even with
@@ -241,8 +244,6 @@ int mctp_smbus_read(struct mctp_binding_smbus *smbus)
 			   smbus_hdr_rx->byte_count);
 		return 0;
 	}
-
-	smbus_hdr_rx = (void *)smbus->rxbuf;
 
 	if (smbus_hdr_rx->destination_slave_address !=
 	    (MCTP_SOURCE_SLAVE_ADDRESS & ~1)) {

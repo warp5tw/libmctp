@@ -30,10 +30,18 @@ struct mctp_hdr {
 #define MCTP_HDR_FLAG_SOM (1 << 7)
 #define MCTP_HDR_FLAG_EOM (1 << 6)
 #define MCTP_HDR_FLAG_TO (1 << 3)
-#define MCTP_HDR_SEQ_SHIFT (4)
-#define MCTP_HDR_SEQ_MASK (0x3)
-#define MCTP_HDR_TAG_SHIFT (0)
-#define MCTP_HDR_TAG_MASK (0x7)
+#define MCTP_HDR_SEQ_SHIFT 4
+#define MCTP_HDR_SEQ_MASK 0x3
+#define MCTP_HDR_SET_SEQ(field, seq)                                           \
+	((field) |= (((seq)&MCTP_HDR_SEQ_MASK) << MCTP_HDR_SEQ_SHIFT))
+#define MCTP_HDR_GET_SEQ(field)                                                \
+	(((field) >> MCTP_HDR_SEQ_SHIFT) & MCTP_HDR_SEQ_MASK)
+#define MCTP_HDR_TAG_SHIFT 0
+#define MCTP_HDR_TAG_MASK 0x7
+#define MCTP_HDR_SET_TAG(field, tag)                                           \
+	((field) |= (((tag)&MCTP_HDR_TAG_MASK) << MCTP_HDR_TAG_SHIFT))
+#define MCTP_HDR_GET_TAG(field)                                                \
+	(((field) >> MCTP_HDR_TAG_SHIFT) & MCTP_HDR_TAG_MASK)
 
 /* Baseline Transmission Unit and packet size */
 #define MCTP_BTU 64
@@ -93,12 +101,13 @@ int mctp_bridge_busses(struct mctp *mctp, struct mctp_binding *b1,
 		       struct mctp_binding *b2);
 
 typedef void (*mctp_rx_fn)(uint8_t src_eid, void *data, void *msg, size_t len,
+			   bool tag_owner, uint8_t tag,
 			   void *msg_binding_private);
 
 int mctp_set_rx_all(struct mctp *mctp, mctp_rx_fn fn, void *data);
 
-int mctp_message_tx(struct mctp *mctp, mctp_eid_t eid, void *msg,
-		    size_t msg_len, void *msg_binding_private);
+int mctp_message_tx(struct mctp *mctp, mctp_eid_t eid, void *msg, size_t len,
+		    bool tag_owner, uint8_t tag, void *msg_binding_private);
 
 /* hardware bindings */
 struct mctp_binding {
@@ -133,6 +142,7 @@ void mctp_set_alloc_ops(void *(*alloc)(size_t), void (*free)(void *),
 void mctp_set_log_stdio(int level);
 void mctp_set_log_syslog(void);
 void mctp_set_log_custom(void (*fn)(int, const char *, va_list));
+void mctp_set_tracing_enabled(bool enable);
 
 /* these should match the syslog-standard LOG_* definitions, for
  * easier use with syslog */
