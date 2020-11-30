@@ -23,7 +23,7 @@ struct mctp_binding_nupcie {
 #define NUPCIE_PACKET_SIZE(x) (NUVOTON_MCTP_PCIE_VDM_HDR_SIZE + x)
 
 /* driver device file */
-#define NU_DRV_FILE "/dev/npcm7xx-vdm"
+#define NU_DRV_FILE "/dev/vdm"
 
 struct mctp_pcie_hdr {
 	uint8_t fmt_type;
