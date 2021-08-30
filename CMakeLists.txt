@@ -2,6 +2,25 @@ cmake_minimum_required (VERSION 3.5 FATAL_ERROR)
 
 project (libmctp)
 
+set(CMAKE_C_FLAGS
+    "${CMAKE_C_FLAGS} \
+    -Wall \
+    -Werror \
+    -Wextra \
+    -Wunused \
+    -Wnull-dereference \
+    -Wpointer-to-int-cast \
+    -Wformat=2 \
+")
+
+# Remove if code fixes
+set(CMAKE_C_FLAGS
+    "${CMAKE_C_FLAGS} \
+    -Wno-unused-parameter \
+    -Wno-sign-compare \
+    -Wno-type-limits \
+")
+
 add_definitions (-DMCTP_LOG_STDERR)
 add_definitions (-DMCTP_HAVE_FILEIO)
 add_definitions (-DMCTP_HAVE_STDIO)
@@ -61,6 +80,9 @@ target_link_libraries (mctp_nupcie_discovery mctp_intel)
 add_executable (test_encode_decode tests/test_encode_decode.c)
 target_link_libraries (test_encode_decode mctp_intel)
 add_test (NAME encode_decode COMMAND test_encode_decode)
+
+add_executable (mctp_astpcie_register_type utils/mctp-astpcie-register-type.c)
+target_link_libraries (mctp_astpcie_register_type mctp_intel)
 
 install (TARGETS mctp_intel DESTINATION lib)
 install (FILES libmctp.h libmctp-cmds.h libmctp-vdpci.h libmctp-smbus.h libmctp-astpcie.h libmctp-nupcie.h libmctp-msgtypes.h DESTINATION include)

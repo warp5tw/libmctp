@@ -182,6 +182,8 @@ static void discovery_with_notify_flow(struct mctp_binding_astpcie *astpcie,
 	struct mctp_astpcie_pkt_private pkt_prv;
 	int rc;
 
+	memset(&req, 0, sizeof(req));
+
 	ctx->discovered = false;
 
 	req.hdr.ic_msg_type = MCTP_CTRL_HDR_MSG_TYPE;
@@ -220,6 +222,9 @@ int main(void)
 	assert(astpcie_binding);
 
 	rc = mctp_register_bus_dynamic_eid(mctp, astpcie_binding);
+	assert(rc == 0);
+
+	rc = mctp_astpcie_register_default_handler(astpcie);
 	assert(rc == 0);
 
 	ctx.mctp = mctp;

@@ -8,6 +8,8 @@
 #include <stdlib.h>
 #include <string.h>
 
+#include <linux/errno-base.h>
+
 #undef pr_fmt
 #define pr_fmt(fmt) "core: " fmt
 
@@ -15,6 +17,8 @@
 #include "libmctp-alloc.h"
 #include "libmctp-log.h"
 #include "libmctp-cmds.h"
+
+#define MAX_SIZE_T_SIZE (size_t) - 1
 
 /* Internal data structures */
 
@@ -63,6 +67,7 @@ struct mctp {
 
 	/* Endpoint UUID */
 	guid_t uuid;
+	size_t max_message_size;
 };
 
 #ifndef BUILD_ASSERT
@@ -74,6 +79,12 @@ struct mctp {
 
 #ifndef ARRAY_SIZE
 #define ARRAY_SIZE(a) (sizeof(a) / sizeof(a[0]))
+#endif
+
+/* 64kb should be sufficient for a single message. Applications
+ * requiring higher sizes can override by setting max_message_size.*/
+#ifndef MCTP_MAX_MESSAGE_SIZE
+#define MCTP_MAX_MESSAGE_SIZE 65536
 #endif
 
 static int mctp_message_tx_on_bus(struct mctp *mctp, struct mctp_bus *bus,
@@ -252,13 +263,22 @@ static void mctp_msg_ctx_reset(struct mctp_msg_ctx *ctx)
 }
 
 static int mctp_msg_ctx_add_pkt(struct mctp_msg_ctx *ctx,
-				struct mctp_pktbuf *pkt)
+				struct mctp_pktbuf *pkt, size_t max_size)
 {
 	size_t len;
 
+	if (mctp_pktbuf_size(pkt) < sizeof(struct mctp_hdr)) {
+		return -1;
+	}
+
 	len = mctp_pktbuf_size(pkt) - sizeof(struct mctp_hdr);
 
-	if (ctx->buf_size + len > ctx->buf_alloc_size) {
+	if (len > MAX_SIZE_T_SIZE - ctx->buf_size) {
+		/* If len + ctx->buf_size overflows, return */
+		return -1;
+	}
+
+	while (ctx->buf_size + len > ctx->buf_alloc_size) {
 		size_t new_alloc_size;
 		void *lbuf;
 
@@ -267,6 +287,13 @@ static int mctp_msg_ctx_add_pkt(struct mctp_msg_ctx *ctx,
 			new_alloc_size = 4096;
 		} else {
 			new_alloc_size = ctx->buf_alloc_size * 2;
+		}
+
+		/* Don't allow heap to grow beyond a limit */
+		if (new_alloc_size > max_size) {
+			mctp_prdebug(
+				"Cannot allocate memory for context buffer");
+			return -1;
 		}
 
 		lbuf = __mctp_realloc(ctx->buf, new_alloc_size);
@@ -291,9 +318,19 @@ struct mctp *mctp_init(void)
 	struct mctp *mctp;
 
 	mctp = __mctp_alloc(sizeof(*mctp));
+	if (!mctp)
+		return NULL;
+
 	memset(mctp, 0, sizeof(*mctp));
 
+	mctp->max_message_size = MCTP_MAX_MESSAGE_SIZE;
+
 	return mctp;
+}
+
+void mctp_set_max_message_size(struct mctp *mctp, size_t message_size)
+{
+	mctp->max_message_size = message_size;
 }
 
 void mctp_destroy(struct mctp *mctp)
@@ -349,6 +386,15 @@ int mctp_register_bus_dynamic_eid(struct mctp *mctp,
 				  struct mctp_binding *binding)
 {
 	return register_bus(mctp, binding);
+}
+
+int mctp_dynamic_eid_set(struct mctp_binding *binding, mctp_eid_t eid)
+{
+	if (binding->bus[0].has_static_eid)
+		return -1;
+
+	binding->bus[0].eid = eid;
+	return 0;
 }
 
 static bool mctp_eid_is_special(mctp_eid_t eid)
@@ -489,14 +535,23 @@ void mctp_bus_rx(struct mctp_binding *binding, struct mctp_pktbuf *pkt)
 	void *p;
 	int rc;
 
-	assert(bus);
+	if (!bus) {
+		mctp_prerr("%s: bus is a NULL pointer.", __func__);
+		return;
+	}
+	if (!pkt) {
+		mctp_prerr("%s: pkt is a NULL pointer.", __func__);
+		return;
+	}
 
 	hdr = mctp_pktbuf_hdr(pkt);
 
 	/* small optimisation: don't bother reassembly if we're going to
 	 * drop the packet in mctp_rx anyway */
-	if (mctp->route_policy == ROUTE_ENDPOINT && hdr->dest != bus->eid &&
-	    hdr->dest != MCTP_EID_NULL && hdr->dest != MCTP_EID_BROADCAST)
+	if (mctp->route_policy == ROUTE_ENDPOINT &&
+	    ((hdr->dest != bus->eid && hdr->dest != MCTP_EID_NULL &&
+	      hdr->dest != MCTP_EID_BROADCAST) ||
+	     binding->version != hdr->ver))
 		goto out;
 
 	tag_owner = hdr->flags_seq_tag & MCTP_HDR_FLAG_TO;
@@ -527,9 +582,13 @@ void mctp_bus_rx(struct mctp_binding *binding, struct mctp_pktbuf *pkt)
 		} else {
 			ctx = mctp_msg_ctx_create(mctp, hdr->src, hdr->dest,
 						  tag_owner, tag);
+			if (!ctx) {
+				mctp_prerr("Context buffers exhausted");
+				goto out;
+			}
 		}
 
-		rc = mctp_msg_ctx_add_pkt(ctx, pkt);
+		rc = mctp_msg_ctx_add_pkt(ctx, pkt, mctp->max_message_size);
 		if (rc) {
 			mctp_msg_ctx_drop(ctx);
 		} else {
@@ -554,7 +613,7 @@ void mctp_bus_rx(struct mctp_binding *binding, struct mctp_pktbuf *pkt)
 			goto out;
 		}
 
-		rc = mctp_msg_ctx_add_pkt(ctx, pkt);
+		rc = mctp_msg_ctx_add_pkt(ctx, pkt, mctp->max_message_size);
 		if (!rc)
 			mctp_rx(mctp, bus, ctx->src, ctx->dest, ctx->buf,
 				ctx->buf_size, tag_owner, tag,
@@ -579,7 +638,7 @@ void mctp_bus_rx(struct mctp_binding *binding, struct mctp_pktbuf *pkt)
 			goto out;
 		}
 
-		rc = mctp_msg_ctx_add_pkt(ctx, pkt);
+		rc = mctp_msg_ctx_add_pkt(ctx, pkt, mctp->max_message_size);
 		if (rc) {
 			mctp_msg_ctx_drop(ctx);
 			goto out;
@@ -590,6 +649,16 @@ void mctp_bus_rx(struct mctp_binding *binding, struct mctp_pktbuf *pkt)
 	}
 out:
 	mctp_pktbuf_free(pkt);
+}
+
+static void flush_all_messages(struct mctp_bus *bus)
+{
+	struct mctp_pktbuf *pkt;
+
+	while ((pkt = bus->tx_queue_head)) {
+		bus->tx_queue_head = pkt->next;
+		mctp_pktbuf_free(pkt);
+	}
 }
 
 static void flush_message(struct mctp_bus *bus)
@@ -626,9 +695,15 @@ static int mctp_send_tx_queue(struct mctp_bus *bus)
 		if (rc < 0) {
 			if (rc == TX_DISABLED_ERR)
 				break;
-			else {
+			else if (rc == -EPERM) {
+				mctp_prdebug(
+					"Operation not permitted, flushing the message");
+				flush_message(bus);
+				continue;
+			} else {
 				mctp_prerr(
-					"Failed to tx mctp packet;flushing message");
+					"Failed to tx mctp packet;flushing message; rc:%d",
+					rc);
 				flush_message(bus);
 				continue;
 			}
@@ -675,6 +750,12 @@ static int mctp_message_tx_on_bus(struct mctp *mctp, struct mctp_bus *bus,
 
 		pkt = mctp_pktbuf_alloc(bus->binding,
 					payload_len + sizeof(*hdr));
+		if (!pkt) {
+			/* Low on memory. Better to flush all messages in tx queue */
+			flush_all_messages(bus);
+			return -1;
+		}
+
 		hdr = mctp_pktbuf_hdr(pkt);
 
 		/* store binding specific private data */
@@ -723,12 +804,6 @@ int mctp_message_tx(struct mctp *mctp, mctp_eid_t eid, void *msg, size_t len,
 	bus = find_bus_for_eid(mctp, eid);
 	return mctp_message_tx_on_bus(mctp, bus, bus->eid, eid, msg, len,
 				      tag_owner, tag, msg_binding_private);
-}
-
-static inline bool mctp_ctrl_cmd_is_control(struct mctp_ctrl_msg_hdr *hdr)
-{
-	return ((hdr->command_code > MCTP_CTRL_CMD_RESERVED) &&
-		(hdr->command_code < MCTP_CTRL_CMD_MAX));
 }
 
 static inline bool mctp_ctrl_cmd_is_transport(struct mctp_ctrl_msg_hdr *hdr)
