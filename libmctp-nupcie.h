@@ -36,7 +36,6 @@ void mctp_nupcie_free(struct mctp_binding_nupcie *b);
 int mctp_nupcie_get_fd(struct mctp_binding_nupcie *nupcie);
 
 /*
-/*
  * Routing types
  */
 enum mctp_nupcie_msg_routing {

@@ -32,6 +32,39 @@ static const struct mctp_pcie_hdr mctp_pcie_hdr_template_be = {
 	.vendor = VENDOR_ID_DMTF_VDM
 };
 
+int mctp_astpcie_get_eid_info_ioctl(struct mctp_binding_astpcie *astpcie,
+				    void *eid_info, uint16_t count,
+				    uint8_t start_eid)
+{
+	struct aspeed_mctp_get_eid_info get_eid_info;
+	int rc;
+
+	get_eid_info.count = count;
+	get_eid_info.start_eid = start_eid;
+	get_eid_info.ptr = (uintptr_t)eid_info;
+
+	rc = ioctl(astpcie->fd, ASPEED_MCTP_IOCTL_GET_EID_INFO, &get_eid_info);
+	if (!rc) {
+		uintptr_t ptr = (uintptr_t)get_eid_info.ptr;
+
+		memcpy(eid_info, (void *)ptr, get_eid_info.count);
+	}
+
+	return rc;
+}
+
+int mctp_astpcie_set_eid_info_ioctl(struct mctp_binding_astpcie *astpcie,
+				    void *eid_info, uint16_t count)
+{
+	struct aspeed_mctp_set_eid_info set_eid_info;
+
+	set_eid_info.count = count;
+	set_eid_info.ptr = (uintptr_t)eid_info;
+
+	return ioctl(astpcie->fd, ASPEED_MCTP_IOCTL_SET_EID_INFO,
+		     &set_eid_info);
+}
+
 static int mctp_astpcie_get_bdf_ioctl(struct mctp_binding_astpcie *astpcie)
 {
 	struct aspeed_mctp_get_bdf bdf;
@@ -67,6 +100,45 @@ mctp_astpcie_get_medium_id_ioctl(struct mctp_binding_astpcie *astpcie)
 		astpcie->medium_id = get_medium_id.medium_id;
 
 	return rc;
+}
+
+int mctp_astpcie_register_default_handler(struct mctp_binding_astpcie *astpcie)
+{
+	return ioctl(astpcie->fd, ASPEED_MCTP_IOCTL_REGISTER_DEFAULT_HANDLER);
+}
+
+int mctp_astpcie_register_type_handler(struct mctp_binding_astpcie *astpcie,
+				       uint8_t mctp_type,
+				       uint16_t pci_vendor_id,
+				       uint16_t vendor_type,
+				       uint16_t vendor_type_mask)
+{
+	struct aspeed_mctp_type_handler_ioctl type_handler;
+
+	type_handler.mctp_type = mctp_type;
+	type_handler.pci_vendor_id = pci_vendor_id;
+	type_handler.vendor_type = vendor_type;
+	type_handler.vendor_type_mask = vendor_type_mask;
+
+	return ioctl(astpcie->fd, ASPEED_MCTP_IOCTL_REGISTER_TYPE_HANDLER,
+		     &type_handler);
+}
+
+int mctp_astpcie_unregister_type_handler(struct mctp_binding_astpcie *astpcie,
+					 uint8_t mctp_type,
+					 uint16_t pci_vendor_id,
+					 uint16_t vendor_type,
+					 uint16_t vendor_type_mask)
+{
+	struct aspeed_mctp_type_handler_ioctl type_handler;
+
+	type_handler.mctp_type = mctp_type;
+	type_handler.pci_vendor_id = pci_vendor_id;
+	type_handler.vendor_type = vendor_type;
+	type_handler.vendor_type_mask = vendor_type_mask;
+
+	return ioctl(astpcie->fd, ASPEED_MCTP_IOCTL_UNREGISTER_TYPE_HANDLER,
+		     &type_handler);
 }
 
 uint8_t mctp_astpcie_get_medium_id(struct mctp_binding_astpcie *astpcie)
@@ -145,7 +217,6 @@ static int mctp_astpcie_tx(struct mctp_binding *b, struct mctp_pktbuf *pkt)
 		(struct mctp_astpcie_pkt_private *)pkt->msg_binding_private;
 	struct mctp_binding_astpcie *astpcie = binding_to_astpcie(b);
 	struct mctp_pcie_hdr *hdr = (struct mctp_pcie_hdr *)pkt->data;
-	struct mctp_hdr *mctp_hdr = mctp_pktbuf_hdr(pkt);
 	uint16_t payload_len_dw = mctp_astpcie_tx_get_payload_size_dw(pkt);
 	uint8_t pad = mctp_astpcie_tx_get_pad_len(pkt);
 	ssize_t write_len, len;
@@ -176,10 +247,14 @@ static int mctp_astpcie_tx(struct mctp_binding *b, struct mctp_pktbuf *pkt)
 
 static size_t mctp_astpcie_rx_get_payload_size(struct mctp_pcie_hdr *hdr)
 {
-	size_t len = PCIE_GET_DATA_LEN(hdr) * sizeof(uint32_t);
+	size_t len_dw = PCIE_GET_DATA_LEN(hdr);
 	uint8_t pad = PCIE_GET_PAD_LEN(hdr);
 
-	return len - pad;
+	/* According to PCIe Spec, 0 means 1024 DW */
+	if (len_dw == 0)
+		len_dw = PCIE_MAX_DATA_LEN_DW;
+
+	return len_dw * sizeof(uint32_t) - pad;
 }
 
 /*
@@ -225,8 +300,8 @@ int mctp_astpcie_rx(struct mctp_binding_astpcie *astpcie)
 	struct mctp_astpcie_pkt_private pkt_prv;
 	struct mctp_pktbuf *pkt;
 	struct mctp_pcie_hdr *hdr;
-	struct mctp_hdr *mctp_hdr;
-	size_t read_len, payload_len;
+	ssize_t read_len;
+	size_t payload_len;
 	int rc;
 
 	read_len = read(astpcie->fd, &data, sizeof(data));
@@ -269,7 +344,6 @@ int mctp_astpcie_rx(struct mctp_binding_astpcie *astpcie)
 		return -1;
 	}
 
-	mctp_hdr = mctp_pktbuf_hdr(pkt);
 	memcpy(pkt->msg_binding_private, &pkt_prv, sizeof(pkt_prv));
 
 	mctp_bus_rx(&astpcie->binding, pkt);
@@ -295,6 +369,9 @@ struct mctp_binding_astpcie *mctp_astpcie_init(void)
 	astpcie->binding.tx = mctp_astpcie_tx;
 	astpcie->binding.start = mctp_astpcie_start;
 	astpcie->binding.pkt_size = MCTP_PACKET_SIZE(MCTP_BTU);
+
+	assert(astpcie->binding.pkt_size - sizeof(struct mctp_hdr) <=
+	       PCIE_MAX_DATA_LEN);
 
 	/* where mctp_hdr starts in in/out comming data
 	 * note: there are two approaches: first (used here) that core

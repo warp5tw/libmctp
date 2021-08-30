@@ -190,6 +190,8 @@ static void discovery_with_notify_flow(struct mctp_binding_nupcie *nupcie,
 	struct mctp_ctrl_req req;
 	struct mctp_nupcie_pkt_private pkt_prv;
 	int rc;
+	//avoid compile warning as error
+	req.hdr.rq_dgram_inst = 0;
 
 	ctx->discovered = false;
 
