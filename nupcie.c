@@ -32,7 +32,7 @@ static const struct mctp_pcie_hdr mctp_pcie_hdr_template_be = {
 	.code = MSG_CODE_VDM_TYPE_1,
 	.vendor = VENDOR_ID_DMTF_VDM
 };
-
+#if 0
 static int mctp_nupcie_get_error(struct mctp_binding_nupcie *nupcie)
 {
     int ret, error = 0;
@@ -45,7 +45,8 @@ static int mctp_nupcie_get_error(struct mctp_binding_nupcie *nupcie)
 
 	return error;
 }
-
+#endif
+#if 0
 static int mctp_nupcie_clear_error(struct mctp_binding_nupcie *nupcie, int error)
 {
     int ret;
@@ -58,13 +59,13 @@ static int mctp_nupcie_clear_error(struct mctp_binding_nupcie *nupcie, int error
 
 	return 0;
 }
-
+#endif
 #define PCIE_VDM_ERR_HW_FIFO_OVERFLOW				0x00000001
 #define PCIE_VDM_ERR_DMA_BUFFER_OVERFLOW			0x00000002
 #define PCIE_VDM_ERR_USER_BUFFER_OVERFLOW			0x00000004
 #define PCIE_VDM_ERR_BUS_RESET_OCCURED				0x00000008
 
-
+#if 0
 static int mctp_nupcie_error_reason(struct mctp_binding_nupcie *nupcie)
 {
     int error;
@@ -88,7 +89,8 @@ static int mctp_nupcie_error_reason(struct mctp_binding_nupcie *nupcie)
 
 	return 0;
 }
-
+#endif
+#if 0
 static int mctp_nupcie_vdm_init(struct mctp_binding_nupcie *nupcie)
 {
     int ret = ioctl(nupcie->fd , PCIE_VDM_REINIT , 0);
@@ -99,7 +101,7 @@ static int mctp_nupcie_vdm_init(struct mctp_binding_nupcie *nupcie)
 
 	return 0;
 }
-
+#endif
 static int mctp_nupcie_open(struct mctp_binding_nupcie *nupcie)
 {
 	int fd = open(NU_DRV_FILE, O_RDWR);
@@ -127,11 +129,11 @@ static int mctp_nupcie_start(struct mctp_binding *b)
 	rc = mctp_nupcie_open(nupcie);
 	if (rc)
 		return -errno;
-
+#if 0
 	rc = mctp_nupcie_vdm_init(nupcie);
 	if (rc)
 		return -errno;
-
+#endif
 	return 0;
 }
 
@@ -158,10 +160,10 @@ static int mctp_nupcie_tx(struct mctp_binding *b,
 		(struct mctp_nupcie_pkt_private *)pkt->msg_binding_private;
 	struct mctp_binding_nupcie *nupcie = binding_to_nupcie(b);
 	struct mctp_pcie_hdr *hdr = (struct mctp_pcie_hdr *)pkt->data;
-	struct mctp_hdr *mctp_hdr = mctp_pktbuf_hdr(pkt);
+	//struct mctp_hdr *mctp_hdr = mctp_pktbuf_hdr(pkt);
 	uint16_t payload_len_dw = mctp_nupcie_tx_get_payload_size_dw(pkt);
 	uint8_t pad = mctp_nupcie_tx_get_pad_len(pkt);
-	ssize_t write_len, len, i;
+	ssize_t write_len, len;//, i;
 
 	memcpy(hdr, &mctp_pcie_hdr_template_be, sizeof(*hdr));
 
@@ -181,7 +183,7 @@ static int mctp_nupcie_tx(struct mctp_binding *b,
 	write_len = write(nupcie->fd, pkt->data, len);
 	if (write_len < 0) {
 		mctp_prerr("TX error");
-		mctp_nupcie_error_reason(nupcie);
+		//mctp_nupcie_error_reason(nupcie);
 		return -1;
 	}
 
@@ -239,14 +241,14 @@ int mctp_nupcie_rx(struct mctp_binding_nupcie *nupcie)
 	struct mctp_nupcie_pkt_private pkt_prv;
 	struct mctp_pktbuf *pkt;
 	struct mctp_pcie_hdr *hdr;
-	struct mctp_hdr *mctp_hdr;
+	//struct mctp_hdr *mctp_hdr;
 	size_t read_len, payload_len;
 	int rc;
 
 	read_len = read(nupcie->fd, &data, sizeof(data));;
 	if (read_len < 0) {
 		mctp_prerr("Reading RX data failed (errno = %d)", errno);
-		mctp_nupcie_error_reason(nupcie);
+		//mctp_nupcie_error_reason(nupcie);
 		return -1;
 	}
 
@@ -280,7 +282,7 @@ int mctp_nupcie_rx(struct mctp_binding_nupcie *nupcie)
 		return -1;
 	}
 
-	mctp_hdr = mctp_pktbuf_hdr(pkt);
+	//mctp_hdr = mctp_pktbuf_hdr(pkt);
 	memcpy(pkt->msg_binding_private, &pkt_prv, sizeof(pkt_prv));
 	mctp_bus_rx(&nupcie->binding, pkt);
 

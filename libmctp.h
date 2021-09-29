@@ -76,6 +76,7 @@ struct mctp;
 struct mctp_bus;
 
 struct mctp *mctp_init(void);
+void mctp_set_max_message_size(struct mctp *mctp, size_t message_size);
 void mctp_destroy(struct mctp *mctp);
 
 /* Register a binding to the MCTP core, and creates a bus (populating
@@ -90,6 +91,14 @@ int mctp_register_bus(struct mctp *mctp, struct mctp_binding *binding,
 
 int mctp_register_bus_dynamic_eid(struct mctp *mctp,
 				  struct mctp_binding *binding);
+
+/* Sets eid for endpoints registered with mctp_register_bus_dynamic_eid()
+ *
+ * For applications that do not implement MCTP control protocol this function
+ * shall be used immediately after endpoint is discovered to set up currently
+ * assigned eid. This will make mctp_bus_rx() recognize endpoint's packets.
+ */
+int mctp_dynamic_eid_set(struct mctp_binding *binding, mctp_eid_t eid);
 
 /* Create a simple bidirectional bridge between busses.
  *
