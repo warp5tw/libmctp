@@ -53,7 +53,7 @@ struct mctp_nupcie_pkt_private {
 	/* source (rx)/target (tx) endpoint bdf */
 	uint16_t remote_id;
 	uint16_t own_id;
-};
+} __attribute__((__packed__));
 
 #ifdef __cplusplus
 }
