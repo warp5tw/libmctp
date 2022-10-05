@@ -51,6 +51,7 @@ struct mctp {
 
 	/* Message RX callback */
 	mctp_rx_fn message_rx;
+	mctp_raw_rx_cb message_rx_raw;
 	void *message_rx_data;
 
 	/* Message reassembly.
@@ -58,9 +59,8 @@ struct mctp {
 	 */
 	struct mctp_msg_ctx msg_ctxs[16];
 
-	enum {
-		ROUTE_ENDPOINT,
-		ROUTE_BRIDGE,
+	enum { ROUTE_ENDPOINT,
+	       ROUTE_BRIDGE,
 	} route_policy;
 	/* Control message RX callback. */
 	mctp_rx_fn control_rx;
@@ -356,6 +356,12 @@ int mctp_set_rx_all(struct mctp *mctp, mctp_rx_fn fn, void *data)
 	return 0;
 }
 
+int mctp_set_rx_raw(struct mctp *mctp, mctp_raw_rx_cb fn)
+{
+	mctp->message_rx_raw = fn;
+	return 0;
+}
+
 static struct mctp_bus *find_bus_for_eid(struct mctp *mctp, mctp_eid_t dest
 					 __attribute__((unused)))
 {
@@ -552,8 +558,16 @@ void mctp_bus_rx(struct mctp_binding *binding, struct mctp_pktbuf *pkt)
 	if (mctp->route_policy == ROUTE_ENDPOINT &&
 	    ((hdr->dest != bus->eid && hdr->dest != MCTP_EID_NULL &&
 	      hdr->dest != MCTP_EID_BROADCAST) ||
-	     MCTP_HDR_GET_VER(hdr->ver) != MCTP_HDR_GET_VER(binding->version)))
+	     MCTP_HDR_GET_VER(hdr->ver) !=
+		     MCTP_HDR_GET_VER(binding->version))) {
+		/* Packet is for different eid. Bridge the packet */
+		if (mctp->message_rx_raw)
+			mctp->message_rx_raw(mctp->message_rx_data, hdr,
+					     pkt->end - pkt->mctp_hdr_off,
+					     pkt->msg_binding_private);
+
 		goto out;
+	}
 
 	tag_owner = hdr->flags_seq_tag & MCTP_HDR_FLAG_TO;
 	flags = hdr->flags_seq_tag & (MCTP_HDR_FLAG_SOM | MCTP_HDR_FLAG_EOM);
@@ -798,6 +812,58 @@ static int mctp_message_tx_on_bus(struct mctp *mctp, struct mctp_bus *bus,
 	return mctp_send_tx_queue(bus);
 }
 
+static int mctp_message_raw_tx_on_bus(struct mctp *mctp, struct mctp_bus *bus,
+				      const void *raw_msg, size_t msg_len,
+				      void *msg_binding_private)
+{
+	struct mctp_pktbuf *pkt;
+	struct mctp_hdr *hdr;
+
+	pkt = mctp_pktbuf_alloc(bus->binding, msg_len);
+	if (!pkt) {
+		mctp_prerr("Not enough memory to allocate MCTP packet");
+		return -1;
+	}
+	if (msg_binding_private) {
+		memcpy(pkt->msg_binding_private, msg_binding_private,
+		       bus->binding->pkt_priv_size);
+	}
+	hdr = mctp_pktbuf_hdr(pkt);
+	memcpy(hdr, (uint8_t *)raw_msg, msg_len);
+	if (bus->tx_queue_tail)
+		bus->tx_queue_tail->next = pkt;
+	else
+		bus->tx_queue_head = pkt;
+	bus->tx_queue_tail = pkt;
+	/* TODO: In case of tx error flush_message is called. However since that
+	 * is based on EOM tag it wont work for bridge packets.
+	 */
+	return mctp_send_tx_queue(bus);
+}
+
+int mctp_message_raw_tx(struct mctp *mctp, const void *msg, size_t len,
+			void *msg_binding_private)
+{
+	struct mctp_bus *bus;
+	uint8_t *msg_arr;
+	mctp_eid_t dest_eid;
+
+	if (!msg || len < sizeof(struct mctp_hdr))
+		return -1;
+
+	msg_arr = (uint8_t *)msg;
+	dest_eid = msg_arr[1];
+	bus = find_bus_for_eid(mctp, dest_eid);
+	if (len > bus->binding->pkt_size) {
+		mctp_prerr(
+			"%zu bytes cannot be transferred in a single bridge packet",
+			len);
+		return -1;
+	}
+	return mctp_message_raw_tx_on_bus(mctp, bus, msg, len,
+					  msg_binding_private);
+}
+
 int mctp_message_tx(struct mctp *mctp, mctp_eid_t eid, void *msg, size_t len,
 		    bool tag_owner, uint8_t tag, void *msg_binding_private)
 {
@@ -970,6 +1036,58 @@ bool mctp_encode_ctrl_cmd_get_routing_table(
 	return true;
 }
 
+bool mctp_encode_ctrl_cmd_allocate_eids(
+	struct mctp_ctrl_cmd_allocate_eids *allocate_eids_cmd,
+	uint8_t rq_dgram_inst, mctp_ctrl_cmd_allocate_eids_op op,
+	uint8_t pool_size, uint8_t eid)
+{
+	if (!allocate_eids_cmd)
+		return false;
+
+	encode_ctrl_cmd_header(&allocate_eids_cmd->ctrl_msg_hdr, rq_dgram_inst,
+			       MCTP_CTRL_CMD_ALLOCATE_ENDPOINT_IDS);
+	allocate_eids_cmd->operation = op;
+	allocate_eids_cmd->eid_pool_size = pool_size;
+	allocate_eids_cmd->first_eid = eid;
+	return true;
+}
+
+bool mctp_encode_ctrl_cmd_routing_information_update(
+	struct mctp_ctrl_cmd_routing_info_update *routing_info_update_cmd,
+	uint8_t rq_dgram_inst,
+	struct get_routing_table_entry_with_address *entries,
+	uint8_t no_of_entries, size_t *new_req_size)
+{
+	struct routing_info_update_entry *cur_entry;
+	uint8_t *entry_dest;
+	uint8_t i;
+
+	/* TODO. Check dest has enough room for new data */
+	if (!routing_info_update_cmd || !entries || !new_req_size ||
+	    no_of_entries == 0)
+		return false;
+	encode_ctrl_cmd_header(&routing_info_update_cmd->ctrl_msg_hdr,
+			       rq_dgram_inst,
+			       MCTP_CTRL_CMD_ROUTING_INFO_UPDATE);
+	routing_info_update_cmd->count = no_of_entries;
+
+	entry_dest = routing_info_update_cmd->entries;
+	for (i = 0; i < no_of_entries; i++) {
+		cur_entry = (struct routing_info_update_entry *)entry_dest;
+		cur_entry->type = entries[i].routing_info.entry_type;
+		cur_entry->eid_count = entries[i].routing_info.eid_range_size;
+		cur_entry->starting_eid = entries[i].routing_info.starting_eid;
+		memcpy(cur_entry->address, entries[i].phys_address,
+		       entries[i].routing_info.phys_address_size);
+		entry_dest = entry_dest +
+			     sizeof(struct routing_info_update_entry) +
+			     entries[i].routing_info.phys_address_size;
+	}
+	*new_req_size =
+		(size_t)(entry_dest - (uint8_t *)(routing_info_update_cmd));
+	return true;
+}
+
 static inline mctp_eid_t mctp_bus_get_eid(struct mctp_bus *bus)
 {
 	return bus->eid;
@@ -1026,6 +1144,20 @@ int mctp_ctrl_cmd_set_endpoint_id(struct mctp *mctp, mctp_eid_t dest_eid,
 	return 0;
 }
 
+bool mctp_encode_ctrl_cmd_query_hop(
+	struct mctp_ctrl_cmd_query_hop *query_hop_cmd, uint8_t rq_dgram_inst,
+	const uint8_t eid, const uint8_t mctp_ctrl_msg_type)
+{
+	if (!query_hop_cmd) {
+		return false;
+	}
+
+	encode_ctrl_cmd_header(&query_hop_cmd->ctrl_msg_hdr, rq_dgram_inst,
+			       MCTP_CTRL_CMD_QUERY_HOP);
+	query_hop_cmd->mctp_ctrl_msg_type = mctp_ctrl_msg_type;
+	query_hop_cmd->target_eid = eid;
+	return true;
+}
 /*
  * @brief Retrieves a byte of medium-specific data from the binding.
  * See DSP0236 1.3.0 12.4 (byte 4).
@@ -1102,4 +1234,37 @@ int mctp_ctrl_cmd_get_vdm_support(
 	response->completion_code = MCTP_CTRL_CC_SUCCESS;
 	/* no more capabiliy sets (default) */
 	return 0;
+}
+
+bool mctp_encode_ctrl_cmd_rsp_get_routing_table(
+	struct mctp_ctrl_resp_get_routing_table *resp,
+	struct get_routing_table_entry_with_address *entries,
+	uint8_t no_of_entries, size_t *resp_size)
+{
+	uint8_t *cur_entry;
+	uint16_t i;
+
+	if (!resp || !entries || !resp_size)
+		return false;
+
+	resp->completion_code = MCTP_CTRL_CC_SUCCESS;
+
+	/* All entries will be enclosed in a single response.
+	*  So next entry handle will be 0xFF to indicate that
+	*  there is no more entries
+	*/
+	resp->next_entry_handle = 0xFF;
+	resp->number_of_entries = no_of_entries;
+	cur_entry = (uint8_t *)resp->entries;
+
+	for (i = 0; i < no_of_entries; i++) {
+		size_t current_entry_size =
+			sizeof(struct get_routing_table_entry_with_address) +
+			entries[i].routing_info.phys_address_size -
+			MAX_PHYSICAL_ADDRESS_SIZE;
+		memcpy(cur_entry, entries + i, current_entry_size);
+		cur_entry += current_entry_size;
+	}
+	*resp_size = (size_t)(cur_entry - (uint8_t *)(resp));
+	return true;
 }
